@@ -1,121 +1,150 @@
 import numpy as np
 import pandas as pd
-import nltk
-#nltk.download()
 from collections import Counter
-from nltk import trigrams, ngrams
-import random
+import re
+from language_model import LanguageModel
+
+import fasttext
+PRETRAINED_MODEL_PATH = '/tmp/lid.176.bin'
+# import fasttext.util
+# fasttext.util.download_model('cs', if_exists='ignore')  # Czech
+# fasttext.util.download_model('sk', if_exists='ignore')  # Slovak
+# ft_cs = fasttext.load_model('cc.cs.300.gz')
+# ft_sk = fasttext.load_model('cc.sk.300.gz')
 
 
-class Trigram:
-    def __init__(self):
-        self.trigram = []
-        self.bigram = []
+def pli_test():
+    #process_corpus()
+    train_text, test_text = get_text("czech_corpus.txt")
 
-        self.prob_trigram = dict()
-        self.prob_bigram = dict()
+    czech_lm = LanguageModel(text=train_text.strip())
+    czech_lm.run_trigram()
+    exit()
 
-    def create(self):
+    #train_text = "abcdcaadd"
+    czech_lm = LanguageModel(text=train_text)
+    czech_lm.run_bigram()
 
-        bigram_text = "<s> dnes respektive dnes možná se uvidíme v kině"
-        text = "<s> <s> dnes respektive dnes možná se uvidíme v kině"
+    train_text, test_text = get_text("slovak_corpus.txt")
 
-        print("text.split() ", text.split())
-        characters = list(text)
-        characters = list("sabcdcaadd")
-        #print("characters ", characters)
+    slovak_lm = LanguageModel(text=train_text)
+    slovak_lm.run_bigram()
 
-        ### Text trigram ###
-        # token = nltk.word_tokenize(text)
-        # trigram = ngrams(token, 3)
-        # print("NLTK trigarms ", trigram)
+    #test_text = "Vyšší daně nebudou platit kupříkladu až od května"
+    classification(czech_lm, slovak_lm, text=test_text[0:10])
 
-
-        # self._create_bigram(text.split())
-        # self._create_trigram(text.split())
-
-        self._create_bigram(characters)
-
-        print("set characters ", set(characters))
-        # self._create_trigram(text.split())
-
-        unique_chars = set(characters)
-
-        # print("self.trigram ", self.trigram)
-        # print("Counter(self.trigram) ", Counter(self.trigram))
-
-        self._conditional_prob_bigram()
-
-        probs = np.zeros((len(unique_chars), len(unique_chars)))
-        print("probs ", probs)
-
-        unique_chars = ['s', 'a', 'b', 'c', 'd']
-
-        for i1, ch1 in enumerate(unique_chars):
-            for i2, ch2 in enumerate(unique_chars):
-                probs[i1, i2] = self.prob_bigram.get(ch1 + "|" + ch2, 0)
-
-                print(ch1 + "|" + ch2 + " = " + str(probs[i1, i2]))
-
-        print("final probs ")
-        print(pd.DataFrame(probs))
-
-        self._witten_bell_smoothing(probs)
+    # tr = LanguageModel()
+    # tr.test_trigram()
+    #
+    model = fasttext.load_model(PRETRAINED_MODEL_PATH)
+    sentences = test_text
+    predictions = model.predict(sentences)
+    print(predictions)
 
 
+def classification(czech_lm, slovak_lm, text):
+    prior_prob = 0.5  # 2 language models are expected
+    test_bigram, _ = LanguageModel.create_bigram(text)
+    print("test bigram ", test_bigram)
 
-        print("prob trigram ", self.prob_trigram)
+    cs_prob = 0
+    sk_prob = 0
+    for pair in test_bigram:
+        print("pair ", pair)
+        ch = pair.split(' ')
 
-        # Characters trigram
-        # token = nltk.word_tokenize(characters)
-        # trigram = ngrams(token, 3)
-        # print("NLTK trigarms ", trigram)
+        if ch[0] == '':
+            ch[0] = ' '
 
-        # self._create_trigram(characters)
-        # print("self.trigram ", self.trigram)
-        # print("Counter(self.trigram) ", Counter(self.trigram))
+        if ch[1] == '':
+            ch[1] = ' '
 
-    def _witten_bell_smoothing(self, probs):
-        pass
+        # print("ch0: {}, ch1: {}".format(ch0, ch1))
+        # print("i0: {} , i1: {}".format(czech_lm.chars_keys[ch0], czech_lm.chars_keys[ch1]))
+        # print("")
 
-    def _create_trigram(self, data):
-        self.unigrams = data
-        for i in range(len(self.unigrams) - 2):
-            self.trigram.append(self.unigrams[i] + ' ' + self.unigrams[i + 1] + ' ' + self.unigrams[i + 2])
+        if ch[1] not in czech_lm.chars_keys or ch[0] not in czech_lm.chars_keys:
+            continue
 
-    def _create_bigram(self, data):
-        self.unigrams = data
-        for i in range(len(self.unigrams) - 1):
-            self.bigram.append(self.unigrams[i] + ' ' + self.unigrams[i + 1])
+        prob = np.log(czech_lm.prob_matrix[czech_lm.chars_keys[ch[0]], czech_lm.chars_keys[ch[1]]])
+        print("PROB ", prob)
+        cs_prob += np.log(czech_lm.prob_matrix[czech_lm.chars_keys[ch[0]], czech_lm.chars_keys[ch[1]]])
+        print("cs prob ", cs_prob)
+        sk_prob += np.log(slovak_lm.prob_matrix[slovak_lm.chars_keys[pair[0]], slovak_lm.chars_keys[pair[1]]])
+        print("sk prob ", sk_prob)
 
-    def _conditional_prob_bigram(self):
-        bigrams_count = Counter(self.bigram)
-        print("bigram count ", bigrams_count)
-        unigrams_count = Counter(self.unigrams[:-1])
-        for i in range(len(self.bigram)):
-            b = self.bigram[i].split()
-            key = b[1] + '|' + b[0]
+    cs_prob = np.exp(cs_prob) * 0.5 if cs_prob != 0 else 0
+    sk_prob = np.exp(sk_prob) * 0.5 if sk_prob != 0 else 0
 
-            print("key ", key)
-            print("bigrams_count[self.bigram[i]] ", bigrams_count[self.bigram[i]])
-            print("unigrams_count[b[0]] ", unigrams_count[b[0]])
+    print("CS: {}, SK: {}".format(cs_prob, sk_prob))
 
-            value = (bigrams_count[self.bigram[i]]) / (unigrams_count[b[0]])
 
-            self.prob_bigram[key] = value
-        print("prob_bigram ", self.prob_bigram)
+def get_text(file):
+    with open(file, "r") as reader:
+        sentences = reader.readlines()
 
-    def _conditional_prob_trigram(self):
-        trigrams_count = Counter(self.trigram)
-        bigrams_count = Counter(self.bigram)
+    weights = [0.8, 0.2]
+    size = len(sentences)
+    mixture_idx = np.random.choice(len(weights), size=size, replace=True, p=weights)
 
-        for i in range(len(self.trigram)):
-            b = self.trigram[i].split()
-            key = b[2] + '|' + b[0] + ' ' + b[1]
-            value = (trigrams_count[self.trigram[i]]) / (bigrams_count[b[0] + ' ' + b[1]])
-            self.prob_trigram[key] = value
+    train = []
+    test = []
+    for idx, sentence in zip(mixture_idx, sentences):
+        if idx == 0:
+            train.append(sentence.strip())
+        else:
+            test.append(sentence.strip())
+
+    train_text = ' '.join(train)
+    test_text = ' '.join(test)
+
+    print("train text ", train_text)
+    print("text text ", test_text)
+
+    return train_text, test_text
+
+
+# def process_corpus():
+#     with open('corpus.txt', 'r', encoding='utf-8') as reader:  # read from file in utf-16 format
+#         corpus_utf16 = reader.readlines()  # read line by line
+#
+#     czech_sentences = []
+#     slovak_sentences = []
+#     for line in corpus_utf16:
+#         # get the last token of the sentence as the language, the others as the sentence
+#
+#         sentence, lang = line.rsplit(None, 1)
+#         if lang == 'cz':
+#             czech_sentences.append(sentence)
+#
+#         if lang == 'sk':
+#             slovak_sentences.append(sentence)
+#
+#     with open("czech_corpus.txt", "w") as writer:
+#         for sentence in czech_sentences:
+#             writer.write(sentence + "\n")
+#
+#     with open("slovak_corpus.txt", "w") as writer:
+#         for sentence in slovak_sentences:
+#             writer.write(sentence + "\n")
+#
+#
+#     print("len(czech sentences) ", len(czech_sentences))
+#     print("czech sentences ", czech_sentences)
+#     print("len(slovak sentences) ", len(slovak_sentences))
 
 
 if __name__ == "__main__":
-    tr = Trigram()
-    tr.create()
+    pli_test()
+
+    # import cProfile
+    # import pstats
+    #
+    # pr = cProfile.Profile()
+    # pr.enable()
+    #
+    # my_result = pli_test()
+    #
+    # pr.disable()
+    # ps = pstats.Stats(pr).sort_stats('cumtime')
+    # ps.print_stats()
