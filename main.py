@@ -142,7 +142,6 @@ def test_models():
         res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sk_maly_princ,
                              no_diacritics=no_diacritics)
 
-        print("expected: {}, result: {}".format("sk", res))
         pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(sk_maly_princ,
                                                                                                     no_diacritics=no_diacritics))))
 
@@ -184,6 +183,7 @@ def test_models():
 
     test_cases(no_diacritics=True)
     pdf_result.print()
+
 
 if __name__ == "__main__":
     create_models()
