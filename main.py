@@ -1,150 +1,282 @@
+import os
 import numpy as np
-import pandas as pd
-from collections import Counter
-import re
-from language_model import LanguageModel
+from language_model import LanguageModel, save_language_model, load_language_model
+from data_preparation import prepare_data, format_text, remove_diacritics
+from results_export import PDFResults
 
 import fasttext
-PRETRAINED_MODEL_PATH = '/tmp/lid.176.bin'
-# import fasttext.util
-# fasttext.util.download_model('cs', if_exists='ignore')  # Czech
-# fasttext.util.download_model('sk', if_exists='ignore')  # Slovak
-# ft_cs = fasttext.load_model('cc.cs.300.gz')
-# ft_sk = fasttext.load_model('cc.sk.300.gz')
+FASTTEXT_MODEL_PATH = 'lid.176.bin'
+
+DATA_PATH = "data/{}"
+LANG_MODELS = "lang_models"
+
+CS_MODEL_DIACRITICS = "cs_model_diacritics"
+CS_MODEL = "cs_model"
+SK_MODEL_DIACRITICS = "sk_model_diacritics"
+SK_MODEL = "sk_model"
 
 
-def pli_test():
-    #process_corpus()
-    train_text, test_text = get_text("czech_corpus.txt")
+def create_trigram(sk=False, no_diacritics=False):
+    if sk:
+        dir_path = DATA_PATH.format('slovak')
+    else:
+        dir_path = DATA_PATH.format('czech')
 
-    czech_lm = LanguageModel(text=train_text.strip())
-    czech_lm.run_trigram()
-    exit()
+    lm_model = LanguageModel(no_diacritics=no_diacritics)
+    files = prepare_data(dir_path, no_diacritics=no_diacritics)
 
-    #train_text = "abcdcaadd"
-    czech_lm = LanguageModel(text=train_text)
-    czech_lm.run_bigram()
+    for file in files:
+        with open(file, "r") as reader:
+            text = reader.read()
+            print("text[:10] ", text[:10])
+            lm_model.update_trigram_counts(text)
 
-    train_text, test_text = get_text("slovak_corpus.txt")
+    return lm_model
 
-    slovak_lm = LanguageModel(text=train_text)
-    slovak_lm.run_bigram()
 
-    #test_text = "Vyšší daně nebudou platit kupříkladu až od května"
-    classification(czech_lm, slovak_lm, text=test_text[0:10])
+def create_models():
+    # cs_model = create_trigram(sk=False, no_diacritics=False)
+    # save_language_model(cs_model, os.path.join(LANG_MODELS, CS_MODEL))
 
-    # tr = LanguageModel()
-    # tr.test_trigram()
+    #sk_model = create_trigram(sk=True, no_diacritics=False)
+    #save_language_model(sk_model, os.path.join(LANG_MODELS, SK_MODEL))
+
+    # cs_model_no_diacritics = create_trigram(sk=False, no_diacritics=True)
+    # save_language_model(cs_model_no_diacritics, os.path.join(LANG_MODELS, CS_MODEL_DIACRITICS))
+
+    sk_model_no_diacritics = create_trigram(sk=True, no_diacritics=True)
+    save_language_model(sk_model_no_diacritics, os.path.join(LANG_MODELS, SK_MODEL_DIACRITICS))
+
+
+def classification(cs_model, cs_model_no_dicritics, sk_model, sk_model_no_diacritics, text, no_diacritics=False):
+    sentences = ['##' + sentence for sentence in
+                 text.split('.')]
+
+    sk_prob, cz_prob = 0, 0
+    for sentence in sentences:
+        for i in range(len(sentence) - 2):
+            try:
+                if no_diacritics:
+                    sk_prob += np.log(sk_model_no_diacritics.smoothed_trigram[sentence[i:i + 3]])
+                    cz_prob += np.log(cs_model_no_dicritics.smoothed_trigram[sentence[i:i + 3]])
+                else:
+                    sk_prob += np.log(sk_model.smoothed_trigram[sentence[i:i + 3]])
+                    cz_prob += np.log(cs_model.smoothed_trigram[sentence[i:i + 3]])
+            except:
+                 Exception("Unknown trigram")
+
+    return "cs" if cz_prob > sk_prob else "sk" if cz_prob < sk_prob else "cs=sk"
+
+
+def test_models():
+    cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics = None, None, None, None
+    fasttext_model = fasttext.load_model(FASTTEXT_MODEL_PATH)
+
+    pdf_result = PDFResults()
+
+    sk_model_no_diacritics = load_language_model(os.path.join(LANG_MODELS, SK_MODEL_DIACRITICS))
+    sk_model = load_language_model(os.path.join(LANG_MODELS, SK_MODEL))
+    cs_model_no_diacritics = load_language_model(os.path.join(LANG_MODELS, CS_MODEL_DIACRITICS))
+    cs_model = load_language_model(os.path.join(LANG_MODELS, CS_MODEL))
+
+
+    def test_cases(no_diacritics=False):
+
+        sentences = {"\"Každopádně teď nechystáme nějaké zásadní změny, musíme to ještě chvilku vydržet\" uvedl po schůzce s"
+                     " prezidentem Zemanem vicepremiér Jan Hamáček (ČSSD).": "cs",
+                     "Stát v březnu oznámil, že lidem uvolněným z práce kvůli pandemii koronaviru vyplatí 80 procent jejich"
+                     " mzdy do maximální výše 2500 liber.": "cs",
+                     "Britský výzkum ale ukazuje, že užívání infotainmentu zkracuje reakční dobu řidiče mnohem víc než některé"
+                     " omamné látky.": "cs",
+                     "Zmeny v Zákonníku práce, ktoré tento týždeň schválil parlament, podľa odborníkov pomôžu zmierniť následky"
+                     " krízy spôsobenej novým koronavírusom.": "sk",
+                     "Je namieste, aby sa zabránilo prepadu životnej úrovne, a tým aj dopytu v ekonomike. Netreba však zabúdať,"
+                     " že síce príslušný fond je pravidelne prebytkový, avšak to bude mať priamy negatívny vplyv na"
+                     " hospodárenie Sociálnej poisťovne (SP) ako celku": "sk",
+                     "Následky dnešného porušovania opatrení tak uvidíme o mesiac, hovorí popredná epidemiologička Zuzana"
+                     " Krištúfková zo Slovenskej zdravotníckej univerzity.": "sk"
+                     }
+
+        #######################
+        ### Jednotlivé věty ###
+        #######################
+        pdf_result.append("Jednotlivé věty", align="C")
+        for sentence, lang in sentences.items():
+            if no_diacritics:
+                pdf_result.append(remove_diacritics(sentence))
+            else:
+                pdf_result.append(sentence)
+            sentence = format_text(sentence, no_diacritics=no_diacritics)
+            res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence)
+
+            pdf_result.append_results("očekávaný jazyk: {}, výsledek clasifikace: {}".format(lang, res))
+            pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(sentence, no_diacritics=no_diacritics))))
+            pdf_result.add_empty_line()
+
+        ##########################
+        ###        Knihy       ###
+        ##########################
+        pdf_result.append("Celé texty", align="C")
+        with open('maly_princ_cs.txt', 'r', encoding='UTF-8') as reader:
+            cs_maly_princ = format_text(reader.read(), no_diacritics=no_diacritics)
+
+        #### Maly princ česky
+        pdf_result.append("kniha Malý princ - česky")
+
+        res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, cs_maly_princ,
+                             no_diacritics=no_diacritics)
+
+        pdf_result.append_results("očekávaný jazyk: {}, výsledek klasifikace: {}".format("cs", res))
+        pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(cs_maly_princ,
+                                                                                                    no_diacritics=no_diacritics))))
+        ### Maly princ slovensky
+        pdf_result.append("kniha Malý princ - slovensky")
+        with open('maly_princ_sk.txt', 'r', encoding='UTF-8') as reader:
+            sk_maly_princ = format_text(reader.read(), no_diacritics=no_diacritics)
+
+        res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sk_maly_princ,
+                             no_diacritics=no_diacritics)
+
+        pdf_result.append_results("očekávaný jazyk: {}, výsledek klasifikace: {}".format("sk", res))
+
+
+        res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sk_maly_princ,
+                             no_diacritics=no_diacritics)
+
+        print("expected: {}, result: {}".format("sk", res))
+        pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(sk_maly_princ,
+                                                                                                    no_diacritics=no_diacritics))))
+
+        ##########################################
+        ###    Knihy po jednotlivých větách    ###
+        ##########################################
+        pdf_result.append("kniha Malý princ - česky, úspěšnost po jednotlivých větách")
+        results = {"cs": 0, "sk": 0}
+        for sentence in ["##" + sentence for sentence in cs_maly_princ.split('.')]:
+            res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence,
+                                 no_diacritics=no_diacritics)
+            results[res] += 1
+
+        pdf_result.append_results("cs: {}/{}, sk: {}/{}".format(results["cs"], results["cs"] + results["sk"],
+                                                       results["sk"], results["cs"] + results["sk"]))
+
+
+        pdf_result.append("kniha Malý princ - slovensky, úspěšnost po jednotlivých větách")
+        results = {"cs": 0, "sk": 0}
+        for sentence in ["##" + sentence for sentence in sk_maly_princ.split('.')]:
+            res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence,
+                                 no_diacritics=no_diacritics)
+            results[res] += 1
+        pdf_result.append_results("cs: {}/{}, sk: {}/{}".format(results["cs"], results["cs"] + results["sk"],
+                                                                results["sk"], results["cs"] + results["sk"]))
+
+
+    #############################
+    ### Texty s diakritikou   ###
+    #############################
+    pdf_result.append_heading("Texty s diakritikou")
+
+    test_cases(no_diacritics=False)
+
+    #############################
+    ### Texty bez diakritiky  ###
+    #############################
+    pdf_result.append_heading("Texty bez diakritiky")
+
+    test_cases(no_diacritics=True)
+
+    pdf_result.print()
+
+
+
     #
-    model = fasttext.load_model(PRETRAINED_MODEL_PATH)
-    sentences = test_text
-    predictions = model.predict(sentences)
-    print(predictions)
-
-
-def classification(czech_lm, slovak_lm, text):
-    prior_prob = 0.5  # 2 language models are expected
-    test_bigram, _ = LanguageModel.create_bigram(text)
-    print("test bigram ", test_bigram)
-
-    cs_prob = 0
-    sk_prob = 0
-    for pair in test_bigram:
-        print("pair ", pair)
-        ch = pair.split(' ')
-
-        if ch[0] == '':
-            ch[0] = ' '
-
-        if ch[1] == '':
-            ch[1] = ' '
-
-        # print("ch0: {}, ch1: {}".format(ch0, ch1))
-        # print("i0: {} , i1: {}".format(czech_lm.chars_keys[ch0], czech_lm.chars_keys[ch1]))
-        # print("")
-
-        if ch[1] not in czech_lm.chars_keys or ch[0] not in czech_lm.chars_keys:
-            continue
-
-        prob = np.log(czech_lm.prob_matrix[czech_lm.chars_keys[ch[0]], czech_lm.chars_keys[ch[1]]])
-        print("PROB ", prob)
-        cs_prob += np.log(czech_lm.prob_matrix[czech_lm.chars_keys[ch[0]], czech_lm.chars_keys[ch[1]]])
-        print("cs prob ", cs_prob)
-        sk_prob += np.log(slovak_lm.prob_matrix[slovak_lm.chars_keys[pair[0]], slovak_lm.chars_keys[pair[1]]])
-        print("sk prob ", sk_prob)
-
-    cs_prob = np.exp(cs_prob) * 0.5 if cs_prob != 0 else 0
-    sk_prob = np.exp(sk_prob) * 0.5 if sk_prob != 0 else 0
-
-    print("CS: {}, SK: {}".format(cs_prob, sk_prob))
-
-
-def get_text(file):
-    with open(file, "r") as reader:
-        sentences = reader.readlines()
-
-    weights = [0.8, 0.2]
-    size = len(sentences)
-    mixture_idx = np.random.choice(len(weights), size=size, replace=True, p=weights)
-
-    train = []
-    test = []
-    for idx, sentence in zip(mixture_idx, sentences):
-        if idx == 0:
-            train.append(sentence.strip())
-        else:
-            test.append(sentence.strip())
-
-    train_text = ' '.join(train)
-    test_text = ' '.join(test)
-
-    print("train text ", train_text)
-    print("text text ", test_text)
-
-    return train_text, test_text
-
-
-# def process_corpus():
-#     with open('corpus.txt', 'r', encoding='utf-8') as reader:  # read from file in utf-16 format
-#         corpus_utf16 = reader.readlines()  # read line by line
-#
-#     czech_sentences = []
-#     slovak_sentences = []
-#     for line in corpus_utf16:
-#         # get the last token of the sentence as the language, the others as the sentence
-#
-#         sentence, lang = line.rsplit(None, 1)
-#         if lang == 'cz':
-#             czech_sentences.append(sentence)
-#
-#         if lang == 'sk':
-#             slovak_sentences.append(sentence)
-#
-#     with open("czech_corpus.txt", "w") as writer:
-#         for sentence in czech_sentences:
-#             writer.write(sentence + "\n")
-#
-#     with open("slovak_corpus.txt", "w") as writer:
-#         for sentence in slovak_sentences:
-#             writer.write(sentence + "\n")
-#
-#
-#     print("len(czech sentences) ", len(czech_sentences))
-#     print("czech sentences ", czech_sentences)
-#     print("len(slovak sentences) ", len(slovak_sentences))
+    # sentences = {
+    #     "\"Každopádně teď nechystáme nějaké zásadní změny, musíme to ještě chvilku vydržet\" uvedl po schůzce s"
+    #     " prezidentem Zemanem vicepremiér Jan Hamáček (ČSSD).": "cs",
+    #     "Stát v březnu oznámil, že lidem uvolněným z práce kvůli pandemii koronaviru vyplatí 80 procent jejich"
+    #     " mzdy do maximální výše 2500 liber.": "cs",
+    #     "Britský výzkum ale ukazuje, že užívání infotainmentu zkracuje reakční dobu řidiče mnohem víc než některé"
+    #     " omamné látky.": "cs",
+    #     "Zmeny v Zákonníku práce, ktoré tento týždeň schválil parlament, podľa odborníkov pomôžu zmierniť následky"
+    #     " krízy spôsobenej novým koronavírusom.": "sk",
+    #     "Je namieste, aby sa zabránilo prepadu životnej úrovne, a tým aj dopytu v ekonomike. Netreba však zabúdať,"
+    #     " že síce príslušný fond je pravidelne prebytkový, avšak to bude mať priamy negatívny vplyv na"
+    #     " hospodárenie Sociálnej poisťovne (SP) ako celku": "sk",
+    #     "Následky dnešného porušovania opatrení tak uvidíme o mesiac, hovorí popredná epidemiologička Zuzana"
+    #     " Krištúfková zo Slovenskej zdravotníckej univerzity.": "sk"
+    #     }
+    #
+    # #######################
+    # ### Jednotlivé věty ###
+    # #######################
+    # pdf_result.append("Jednotlivé věty", align="C")
+    # for sentence, lang in sentences.items():
+    #     pdf_result.append(remove_diacritics(sentence))
+    #     sentence = format_text(sentence, no_diacritics=False)
+    #     res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence)
+    #
+    #     pdf_result.append_results("očekávaný jazyk: {}, výsledek clasifikace: {}".format(lang, res))
+    #     pdf_result.append_results(
+    #         "fasttext výsledek: {}".format(fasttext_model.predict(format_text(sentence, no_diacritics=False))))
+    #     pdf_result.add_empty_line()
+    #
+    # ##########################
+    # ###        Knihy       ###
+    # ##########################
+    # pdf_result.append("Celé texty", align="C")
+    # with open('maly_princ_cs.txt', 'r', encoding='UTF-8') as reader:
+    #     cs_maly_princ = format_text(reader.read(), no_diacritics=True)
+    #
+    # #### Maly princ česky
+    # pdf_result.append("kniha Malý princ - česky")
+    #
+    # res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, cs_maly_princ,
+    #                      no_diacritics=True)
+    #
+    # pdf_result.append_results("očekávaný jazyk: {}, výsledek klasifikace: {}".format("cs", res))
+    # pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(cs_maly_princ,
+    #                                                                                             no_diacritics=False))))
+    # ### Maly princ slovensky
+    # pdf_result.append("kniha Malý princ - slovensky")
+    # with open('maly_princ_sk.txt', 'r', encoding='UTF-8') as reader:
+    #     sk_maly_princ = format_text(reader.read(), no_diacritics=True)
+    #
+    # res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sk_maly_princ,
+    #                      no_diacritics=False)
+    #
+    # pdf_result.append_results("očekávaný jazyk: {}, výsledek klasifikace: {}".format("sk", res))
+    #
+    # res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sk_maly_princ,
+    #                      no_diacritics=False)
+    #
+    # print("expected: {}, result: {}".format("sk", res))
+    # pdf_result.append_results("fasttext výsledek: {}".format(fasttext_model.predict(format_text(sk_maly_princ,
+    #                                                                                             no_diacritics=False))))
+    #
+    # ##########################################
+    # ###    Knihy po jednotlivých větách    ###
+    # ##########################################
+    # pdf_result.append("kniha Malý princ - česky, úspěšnost po jednotlivých větách")
+    #
+    # results = {"cs": 0, "sk": 0}
+    # for sentence in ["##" + sentence for sentence in cs_maly_princ.split('.')]:
+    #     res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence,
+    #                          no_diacritics=False)
+    #     results[res] += 1
+    #
+    # pdf_result.append("kniha Malý princ - slovensky, úspěšnost po jednotlivých větách")
+    #
+    # results = {"cs": 0, "sk": 0}
+    # for sentence in ["##" + sentence for sentence in cs_maly_princ.split('.')]:
+    #     res = classification(cs_model, cs_model_no_diacritics, sk_model, sk_model_no_diacritics, sentence,
+    #                          no_diacritics=False)
+    #     results[res] += 1
+    #
+    # print("results ", results)
+    #
+    #
 
 
 if __name__ == "__main__":
-    pli_test()
-
-    # import cProfile
-    # import pstats
-    #
-    # pr = cProfile.Profile()
-    # pr.enable()
-    #
-    # my_result = pli_test()
-    #
-    # pr.disable()
-    # ps = pstats.Stats(pr).sort_stats('cumtime')
-    # ps.print_stats()
+    #create_models()
+    test_models()
